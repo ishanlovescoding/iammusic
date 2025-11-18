@@ -266,25 +266,27 @@ A web-based passive tracking application that:
 - Social connections
 - Relational data integrity
 
-**Caching:** Redis
+**Caching:** Redis (Upstash Redis Free Tier: 10K commands/day or Redis Cloud 30MB free)
 - Session storage
 - API response caching
 - Real-time data
 
-**File Storage:** AWS S3 or Cloudinary
+**File Storage:** Cloudflare R2 (10GB free) or Supabase Storage (1GB free)
 - Profile pictures
 - Cached album art
+- Alternative: Store external URLs only (no storage cost)
 
-**Background Jobs:** Bull Queue
+**Background Jobs:** Bull Queue or node-cron (both free, open source)
 - Scheduled 9:30pm notifications
 - Stats calculations
 - Weekly recaps
+- Backend polling for Spotify API (every 30-60 min)
 
 **Hosting:**
-- Frontend: Vercel or Netlify
-- Backend: AWS, Heroku, or Railway
-- Database: AWS RDS or Supabase
-- CDN: Cloudflare
+- Frontend: Vercel Free Tier or Netlify Free Tier
+- Backend: Render.com Free Tier or Fly.io (3 VMs free)
+- Database: Neon Serverless Postgres (Free) or Supabase Free Tier
+- CDN: Cloudflare Free Tier
 
 **Acceptance Criteria:**
 - [ ] API response times <200ms
@@ -375,18 +377,31 @@ A web-based passive tracking application that:
   - Duration listened
   - Album art URL
 - Store in database with user ID
-- Client-side tracking with backend sync
+- **Dual-tracking system: Backend polling + Client-side tracking**
 
-**Polling Strategy:**
-- User active (tab visible): Poll every 2 minutes
-- User inactive (tab hidden): Poll every 15 minutes
-- Stop polling after 9:30pm until next day
+**Polling Strategy (Backend - Primary):**
+- **Backend server polls every 30-60 minutes** for all active users
+- Uses Spotify's `recently-played` endpoint (returns last 50 tracks)
+- Adaptive polling frequency based on user listening volume:
+  - Heavy listeners (>20 songs/hour): Poll every 30 minutes
+  - Moderate listeners (10-20 songs/hour): Poll every 60 minutes
+  - Light listeners (<10 songs/hour): Poll every 120 minutes
+- Deduplication using `played_at` timestamps to avoid storing duplicates
+- **Critical: Solves Spotify's 50-item API limit by polling before data falls out of window**
+
+**Polling Strategy (Client-side - Supplementary):**
+- When user has app/tab open:
+  - Active tab: Poll every 2 minutes
+  - Inactive tab: Poll every 15 minutes
+- Syncs with backend to fill gaps
+- Provides real-time updates when app is open
 
 **Web-Specific Challenges:**
 - Page Visibility API to detect tab visibility
 - Service Worker for background sync (PWA)
 - Local Storage for temporary data before sync
-- Handle browser being closed (resume tracking on reopen)
+- Handle browser being closed (backend polling continues)
+- Gap detection: Flag if timestamp gap > polling window (potential data loss)
 
 **Logic:**
 - Count plays: A "play" = listening to >30 seconds
@@ -395,11 +410,14 @@ A web-based passive tracking application that:
 - Daily reset at 9:30pm
 
 **Acceptance Criteria:**
-- [ ] Accurately tracks songs across browser sessions
-- [ ] Works when tab is in background
-- [ ] Data syncs to server regularly
-- [ ] Minimal battery/CPU usage
+- [ ] Backend polling captures 95%+ of all plays (no 50-item limit loss)
+- [ ] Accurately tracks songs even when browser is closed
+- [ ] Adaptive polling adjusts based on user listening patterns
+- [ ] Deduplication prevents duplicate entries
+- [ ] Data syncs to server regularly from both backend and client
+- [ ] Minimal battery/CPU usage on client-side
 - [ ] Handles browser close/reopen gracefully
+- [ ] Gap detection alerts if potential data loss detected
 
 ---
 
@@ -465,7 +483,7 @@ A web-based passive tracking application that:
 
 **Fallback Strategy:**
 - If notifications not supported/denied: In-app notification badge
-- Email notification option
+- Email notification option (via **Resend** - 3K emails/month free or **Brevo** - 300 emails/day free)
 - Browser tab title update ("🎵 Song ready!")
 
 **User Settings:**
@@ -1659,14 +1677,14 @@ updated_at: TIMESTAMP
 **Priority:** P0 (Must Have)
 
 **Service:**
-- Web Push Protocol (standard)
+- Web Push Protocol (standard, 100% free)
 - VAPID keys for identification
 - Service worker handles push events
 
 **Implementation:**
 - Request permission during onboarding
 - Store subscription in database
-- Send via Web Push API or service (OneSignal, Firebase)
+- Send via **Firebase Cloud Messaging** (completely free) or native Web Push API
 
 **Notification Types:**
 - Daily song reveal (9:30pm)
@@ -1682,7 +1700,7 @@ updated_at: TIMESTAMP
 - ❌ iOS Safari (very limited)
 
 **Fallback:**
-- Email notifications for iOS users
+- Email notifications for iOS users (via Resend or Brevo free tier)
 - In-app notification center
 
 **Acceptance Criteria:**
@@ -2114,24 +2132,28 @@ Borders:
 
 ### 9.4 Analytics & Monitoring
 
-**User Analytics (Mixpanel or Amplitude):**
+**User Analytics (Free Options):**
+- **Umami** (self-hosted, open source) or **PostHog** (1M events/month free)
 - Page views
 - User actions (clicks, reactions, comments)
 - User flows and funnels
 - Retention cohorts
 - A/B test results
 
-**Performance Monitoring (Sentry or LogRocket):**
-- Error tracking
+**Performance Monitoring (Free Tiers):**
+- **Sentry** (5K errors/month free) - Error tracking
+- **Better Stack** (1GB logs/month free) - Logging
 - Performance metrics
-- Session replay
 - User feedback
 
-**Backend Monitoring (Datadog or New Relic):**
+**Backend Monitoring (Free Options):**
+- **Sentry** (covers backend errors)
+- **Better Stack** (free tier logging)
+- Custom metrics dashboard (self-built)
 - API response times
 - Database query performance
 - Server health
-- Uptime monitoring
+- Uptime monitoring via **UptimeRobot** (free: 50 monitors)
 
 **Events to Track:**
 - Sign up completed
@@ -2424,6 +2446,30 @@ Borders:
 
 ---
 
+### 12.5 Infrastructure & Cost Risks
+
+**Risk:** Free tier limits exceeded during growth
+- **Mitigation:** Monitor usage closely, prepare upgrade path
+- **Backup:** Implement usage alerts at 80% capacity, optimize before hitting limits
+
+**Risk:** Render.com cold starts hurt UX
+- **Mitigation:** Use Fly.io (no cold starts) or upgrade to paid Render
+- **Backup:** Keep-alive ping service, migrate to paid tier ($7/mo)
+
+**Risk:** Database storage fills up (512MB limit)
+- **Mitigation:** Archive old data, implement data retention policy
+- **Backup:** Upgrade to Neon paid ($19/mo) or migrate to self-hosted Postgres
+
+**Risk:** Backend polling exceeds API rate limits
+- **Mitigation:** Implement smart batching, respect rate limits, exponential backoff
+- **Backup:** Reduce polling frequency temporarily, prioritize active users
+
+**Risk:** Sudden traffic spike breaks free tier
+- **Mitigation:** Implement queue system, rate limiting on signup
+- **Backup:** Emergency upgrade to paid tiers, communicate with users
+
+---
+
 ## 13. Future Considerations
 
 ### 13.1 Potential Features (6-12 months)
@@ -2521,7 +2567,7 @@ Borders:
 
 ---
 
-### 14.2 Tech Stack Summary
+### 14.2 Tech Stack Summary (100% Free)
 
 **Frontend:**
 - React 18
@@ -2534,37 +2580,101 @@ Borders:
 **Backend:**
 - Node.js + Express
 - PostgreSQL
-- Redis
+- Redis (Upstash Free or Redis Cloud Free)
 - Socket.io
-- Bull Queue
+- Bull Queue or node-cron
 
-**Hosting:**
-- Vercel (frontend)
-- Railway/Heroku (backend)
-- AWS RDS (database)
-- Cloudflare (CDN)
+**Hosting (All Free Tiers):**
+- Vercel Free or Netlify Free (frontend)
+- Render.com Free or Fly.io (backend - 3 VMs free)
+- Neon Serverless Postgres Free or Supabase Free (database)
+- Cloudflare Free (CDN)
+- Cloudflare R2 Free (file storage - 10GB)
 
-**Third-Party:**
-- Spotify Web API
-- Web Push API
-- Mixpanel/Amplitude (analytics)
-- Sentry (error tracking)
+**Third-Party (All Free):**
+- Spotify Web API (free)
+- Firebase Cloud Messaging (push notifications - free)
+- Umami self-hosted or PostHog Free (analytics - 1M events/month)
+- Sentry Free (error tracking - 5K errors/month)
+- Better Stack Free (logging - 1GB/month)
+- UptimeRobot Free (uptime monitoring - 50 monitors)
+
+**Total Cost: $0/month** (supports ~1,000 active users)
 
 ---
 
-### 14.3 Open Questions
+### 14.3 Free Tier Limitations & Scale Considerations
+
+**Current Free Tier Limits:**
+
+**Render.com Free Tier:**
+- Apps spin down after 15 minutes of inactivity (cold starts ~30s)
+- 750 hours/month shared across all services
+- Limited to web services only
+
+**Neon Postgres Free:**
+- 512MB storage (estimated ~50K-100K daily song entries)
+- Databases pause after 5 minutes of inactivity
+- 10 projects maximum
+
+**Upstash Redis Free:**
+- 10,000 commands/day
+- ~417 commands/hour (may need optimization for high traffic)
+
+**Vercel/Netlify Free:**
+- 100GB bandwidth/month
+- With 10K users averaging 10MB each = 100GB (at limit)
+
+**Cloudflare R2 Free:**
+- 10GB storage
+- 10M Class A operations/month
+- 100M Class B operations/month
+
+**PostHog Free:**
+- 1M events/month
+- With 1K users × 50 events/user/month = 50K events (well within limits)
+
+**When You'll Need to Upgrade:**
+
+| Users | Issue | Solution | Cost |
+|-------|-------|----------|------|
+| 1K-5K | Render cold starts annoying | Upgrade to paid ($7/mo) or switch to Fly.io | $7/mo |
+| 5K-10K | Database > 512MB | Upgrade Neon ($19/mo) or Supabase ($25/mo) | $19-25/mo |
+| 10K+ | Bandwidth > 100GB | Stay on Vercel (CDN handles it) or upgrade | $0-20/mo |
+| 20K+ | Redis commands > 10K/day | Upgrade Upstash ($10/mo) | $10/mo |
+| 50K+ | Analytics > 1M events | Self-host Umami (free) or upgrade PostHog | $0-49/mo |
+
+**Estimated Monthly Costs:**
+- **0-1K users**: $0/month (100% free)
+- **1K-10K users**: $7-50/month
+- **10K-50K users**: $50-150/month
+- **50K-100K users**: $150-400/month
+
+**Cost Optimization Strategies:**
+1. Keep frontend on Vercel/Netlify free (Cloudflare CDN handles bandwidth)
+2. Self-host analytics (Umami) instead of paid services
+3. Use Fly.io (3 free VMs) instead of Render to avoid cold starts
+4. Optimize Redis usage to stay under 10K commands/day
+5. Archive old listening data to reduce database size
+6. Use Cloudflare R2 (stays free longer than S3)
+
+---
+
+### 14.4 Open Questions
 
 1. Should we allow manual song logging?
 2. Share with branding vs. clean share?
 3. Limit emoji reactions or allow custom?
 4. What if no songs played that day?
 5. Show friends' full stats or just top 3?
+6. Backend polling frequency: Start with 60min or 30min for all users?
+7. How to handle users who exceed free tier limits?
 
 **Decision deadline:** Phase 2 (Beta)
 
 ---
 
-### 14.4 Success Stories (Aspirational)
+### 14.5 Success Stories (Aspirational)
 
 **6 months:**
 - Featured on Product Hunt #1
